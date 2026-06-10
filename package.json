@@ -1,0 +1,65 @@
+{
+  "name": "agentscribe-desktop",
+  "version": "0.1.0",
+  "description": "Invisible desktop overlay for AgentScribe — excluded from screen capture via OS-level content protection.",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^34.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.agentscribe.desktop",
+    "productName": "AgentScribe",
+    "files": [
+      "main.js",
+      "preload.js"
+    ],
+    "directories": {
+      "buildResources": "build"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "shanu9",
+      "repo": "agentscribe-desktop"
+    },
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg"
+      ],
+      "artifactName": "AgentScribe.${ext}",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "AgentScribe listens to your meeting audio so it can transcribe and answer in real time."
+      }
+    },
+    "dmg": {
+      "artifactName": "AgentScribe.${ext}"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "AgentScribe-Setup.${ext}"
+    },
+    "nsis": {
+      "artifactName": "AgentScribe-Setup.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "artifactName": "AgentScribe.${ext}"
+    }
+  }
+}

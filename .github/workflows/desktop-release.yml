@@ -1,0 +1,66 @@
+name: Build desktop installers
+
+# Builds the AgentScribe desktop app for macOS (.dmg) and Windows (.exe) and
+# uploads them to a GitHub Release — so you never run a build command by hand.
+#
+# How to cut a release:
+#   1. Bump "version" in package.json (e.g. 0.1.0 → 0.2.0).
+#   2. Commit, then tag it to MATCH:  git tag v0.2.0 && git push --tags
+#   3. This workflow builds both installers and attaches them to a DRAFT release.
+#   4. Open the release on GitHub, review, and click "Publish release".
+#      Only then do the website's /releases/latest/download/... links go live.
+#
+# Unsigned by default (works for testing; users see a Gatekeeper/SmartScreen
+# warning). To sign + notarize, add the optional repo secrets referenced below.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # required to create/update Releases
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            args: --mac
+          - os: windows-latest
+            args: --win
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and publish installer
+        run: npx electron-builder ${{ matrix.args }} --publish always
+        env:
+          # Lets electron-builder upload assets to the GitHub Release.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+          # ── Optional code-signing / notarization ────────────────────────
+          # Leave these secrets unset for unsigned builds. When present,
+          # electron-builder signs (and on macOS, notarizes) automatically.
+          # macOS — Developer ID cert + notarization:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows — code-signing cert (these reuse the same CSC_* vars on the
+          # Windows runner; set them as separate secrets if your certs differ):
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}

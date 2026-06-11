@@ -1,17 +1,22 @@
 name: Build desktop installers
 
-# Builds the AgentScribe desktop app for macOS (.dmg) and Windows (.exe) and
-# uploads them to a GitHub Release — so you never run a build command by hand.
+# Builds the AgentScribe Windows installer (.exe) and uploads it to a GitHub
+# Release — so you never run a build command by hand.
+#
+# macOS is NOT built here: the .dmg is hosted on Azure Blob (see the website's
+# scribe/download/links.ts). To add signed mac CI later, re-add a
+# `{ os: macos-latest, args: --mac }` matrix entry plus the Apple signing
+# secrets below.
 #
 # How to cut a release:
 #   1. Bump "version" in package.json (e.g. 0.1.0 → 0.2.0).
 #   2. Commit, then tag it to MATCH:  git tag v0.2.0 && git push --tags
-#   3. This workflow builds both installers and attaches them to a DRAFT release.
+#   3. This workflow builds the installer and attaches it to a DRAFT release.
 #   4. Open the release on GitHub, review, and click "Publish release".
 #      Only then do the website's /releases/latest/download/... links go live.
 #
-# Unsigned by default (works for testing; users see a Gatekeeper/SmartScreen
-# warning). To sign + notarize, add the optional repo secrets referenced below.
+# Unsigned by default (works for testing; users see a SmartScreen warning). To
+# sign, add the optional Windows code-signing secrets referenced below.
 
 on:
   push:
@@ -28,8 +33,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
-            args: --mac
           - os: windows-latest
             args: --win
     runs-on: ${{ matrix.os }}

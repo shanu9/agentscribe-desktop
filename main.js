@@ -236,13 +236,23 @@ function main() {
     const ses = session.defaultSession;
 
     // Allow the web app's mic / media requests (needed for "Start mic").
+    // getUserMedia passes through TWO gates in Electron: the async REQUEST
+    // handler (prompt) AND a synchronous CHECK handler. If the check handler is
+    // missing, Electron can deny the mic even though the request handler allows
+    // it — which surfaced as "microphone not found / permission" INSIDE the app
+    // even after the user granted access. Both must say yes.
+    const allowMedia = (permission) =>
+      permission === "media" ||
+      permission === "audioCapture" ||
+      permission === "microphone" ||
+      permission === "mediaKeySystem";
+
     ses.setPermissionRequestHandler((_wc, permission, callback) => {
-      callback(
-        permission === "media" ||
-          permission === "audioCapture" ||
-          permission === "mediaKeySystem"
-      );
+      callback(allowMedia(permission));
     });
+    if (typeof ses.setPermissionCheckHandler === "function") {
+      ses.setPermissionCheckHandler((_wc, permission) => allowMedia(permission));
+    }
 
     // Allow getDisplayMedia (the "Record screen share" path) to resolve with
     // the primary screen + loopback audio, no flaky in-page picker.

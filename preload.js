@@ -1,7 +1,10 @@
-// Intentionally minimal.
-//
-// This window loads the AgentScribe web app directly, so we expose NO
-// privileged Node/Electron APIs to that remote content — contextIsolation is
-// on and sandbox is enabled in main.js. Keeping the preload empty is the
-// secure default; add a contextBridge.exposeInMainWorld() bridge here only if
-// the web app ever needs to call into the desktop shell.
+// Minimal, safe bridge: expose ONLY window-control actions (no Node/filesystem)
+// so the loaded web app can offer a close/minimize button. contextIsolation is
+// on and sandbox is enabled in main.js, so this is the only surface exposed.
+const { contextBridge, ipcRenderer } = require("electron");
+
+contextBridge.exposeInMainWorld("agentscribe", {
+  isDesktop: true,
+  quit: () => ipcRenderer.send("as:quit"),
+  minimize: () => ipcRenderer.send("as:minimize"),
+});

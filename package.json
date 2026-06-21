@@ -1,7 +1,9 @@
 {
   "name": "agentscribe-desktop",
-  "version": "0.1.0",
+  "version": "1.0.1",
   "description": "Invisible desktop overlay for AgentScribe — excluded from screen capture via OS-level content protection.",
+  "author": "Agent Core Systems <agentcoresystem@gmail.com>",
+  "homepage": "https://agentcoresystem.com",
   "private": true,
   "main": "main.js",
   "scripts": {
@@ -19,7 +21,8 @@
     "productName": "AgentScribe",
     "files": [
       "main.js",
-      "preload.js"
+      "preload.js",
+      "build/icon.png"
     ],
     "directories": {
       "buildResources": "build"
@@ -31,6 +34,7 @@
     },
     "mac": {
       "category": "public.app-category.productivity",
+      "icon": "build/icon.png",
       "target": [
         "dmg"
       ],
@@ -50,9 +54,16 @@
       "target": [
         "nsis"
       ],
+      "icon": "build/icon.png",
       "artifactName": "AgentScribe-Setup.${ext}"
     },
     "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AgentScribe",
       "artifactName": "AgentScribe-Setup.${ext}"
     },
     "linux": {

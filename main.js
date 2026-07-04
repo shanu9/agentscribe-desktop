@@ -22,6 +22,7 @@ const {
   nativeImage,
   ipcMain,
 } = require("electron");
+const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const fs = require("fs");
 
@@ -36,6 +37,8 @@ const NUDGE = 40; // px the window moves per arrow-hotkey press
 let win = null;
 let tray = null;
 let opacity = 1;
+// "idle" | "checking" | "downloading" | "downloaded" | "error"
+let updateState = "idle";
 
 // ── Window-state persistence ────────────────────────────────────────────────
 // Position/size/opacity are saved to userData so the overlay reopens exactly
@@ -190,6 +193,51 @@ function createWindow() {
 // System tray — a production-grade, ALWAYS-available control surface. Even when
 // the overlay is hidden (hotkey), always-on-top, or you can't find the window,
 // the tray icon guarantees a way to Show/Hide and — most importantly — Quit.
+// Tray menu is rebuilt whenever the update state changes (so it can surface
+// "Restart to update"), so the template lives in its own function.
+function buildTrayMenu() {
+  const items = [
+    { label: "Show / Hide AgentScribe", click: () => toggleVisibility() },
+    { label: "Reload", click: () => win && win.reload() },
+    { type: "separator" },
+  ];
+  if (updateState === "downloaded") {
+    items.push({
+      label: "Restart to update ✨",
+      click: () => {
+        app.isQuitting = true;
+        autoUpdater.quitAndInstall();
+      },
+    });
+  } else {
+    items.push({
+      label:
+        updateState === "checking"
+          ? "Checking for updates…"
+          : updateState === "downloading"
+            ? "Downloading update…"
+            : "Check for updates",
+      enabled: updateState === "idle" || updateState === "error",
+      click: () => checkForUpdates(true),
+    });
+  }
+  items.push(
+    { type: "separator" },
+    {
+      label: "Quit AgentScribe",
+      click: () => {
+        app.isQuitting = true;
+        app.quit();
+      },
+    }
+  );
+  return Menu.buildFromTemplate(items);
+}
+
+function refreshTray() {
+  if (tray) tray.setContextMenu(buildTrayMenu());
+}
+
 function createTray() {
   if (tray) return;
   try {
@@ -197,25 +245,7 @@ function createTray() {
     if (!img.isEmpty()) img = img.resize({ width: 18, height: 18 });
     tray = new Tray(img.isEmpty() ? nativeImage.createEmpty() : img);
     tray.setToolTip("AgentScribe");
-    const menu = Menu.buildFromTemplate([
-      {
-        label: "Show / Hide AgentScribe",
-        click: () => toggleVisibility(),
-      },
-      {
-        label: "Reload",
-        click: () => win && win.reload(),
-      },
-      { type: "separator" },
-      {
-        label: "Quit AgentScribe",
-        click: () => {
-          app.isQuitting = true;
-          app.quit();
-        },
-      },
-    ]);
-    tray.setContextMenu(menu);
+    tray.setContextMenu(buildTrayMenu());
     // Left-click the tray → bring the overlay to front (Windows behaviour).
     tray.on("click", () => {
       if (!win) return;
@@ -225,6 +255,66 @@ function createTray() {
   } catch {
     /* tray is a safety net; never block startup if it fails */
   }
+}
+
+// ── Auto-update ──────────────────────────────────────────────────────────────
+// Background updates from GitHub Releases (the same target CI publishes to), so
+// users never have to re-download. Downloads silently, installs on next quit;
+// the tray surfaces "Restart to update" the moment a build is ready. Everything
+// is best-effort — a failed/absent update must never disrupt a live meeting.
+let updateTimer = null;
+
+function checkForUpdates(userInitiated) {
+  // Auto-update only works from a packaged app; skip in `npm start` dev.
+  if (!app.isPackaged) {
+    if (userInitiated) {
+      updateState = "idle";
+      refreshTray();
+    }
+    return;
+  }
+  if (updateState === "checking" || updateState === "downloading") return;
+  updateState = "checking";
+  refreshTray();
+  autoUpdater.checkForUpdates().catch(() => {
+    updateState = "error";
+    refreshTray();
+  });
+}
+
+function setupAutoUpdater() {
+  if (!app.isPackaged) return;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on("update-available", () => {
+    updateState = "downloading";
+    refreshTray();
+  });
+  autoUpdater.on("update-not-available", () => {
+    updateState = "idle";
+    refreshTray();
+  });
+  autoUpdater.on("download-progress", () => {
+    if (updateState !== "downloading") {
+      updateState = "downloading";
+      refreshTray();
+    }
+  });
+  autoUpdater.on("update-downloaded", () => {
+    updateState = "downloaded";
+    refreshTray();
+  });
+  autoUpdater.on("error", () => {
+    // Offline, no release yet, or (unsigned build) a verification hiccup —
+    // all expected; degrade to manual download silently.
+    updateState = "error";
+    refreshTray();
+  });
+
+  // Check shortly after launch (let the UI settle first), then every 6 hours.
+  setTimeout(() => checkForUpdates(false), 8000);
+  updateTimer = setInterval(() => checkForUpdates(false), 6 * 60 * 60 * 1000);
 }
 
 function showError(detail) {
@@ -346,6 +436,7 @@ function main() {
     createWindow();
     createTray();
     registerShortcuts();
+    setupAutoUpdater();
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -358,5 +449,6 @@ function main() {
 
   app.on("will-quit", () => {
     globalShortcut.unregisterAll();
+    if (updateTimer) clearInterval(updateTimer);
   });
 }

@@ -23,6 +23,7 @@ const {
   ipcMain,
 } = require("electron");
 const path = require("path");
+const fs = require("fs");
 
 // Open STRAIGHT into the live copilot (clean app chrome), not the marketing
 // page. Override for local dev:
@@ -35,6 +36,58 @@ const NUDGE = 40; // px the window moves per arrow-hotkey press
 let win = null;
 let tray = null;
 let opacity = 1;
+
+// ── Window-state persistence ────────────────────────────────────────────────
+// Position/size/opacity are saved to userData so the overlay reopens exactly
+// where the user left it (it used to reset to the top-right corner every
+// launch, undoing their placement). Guarded everywhere: a corrupt or
+// off-screen saved state must never strand the window where it can't be seen.
+const STATE_FILE = () => path.join(app.getPath("userData"), "window-state.json");
+
+function loadState() {
+  try {
+    const s = JSON.parse(fs.readFileSync(STATE_FILE(), "utf8"));
+    if (s && typeof s === "object") return s;
+  } catch {
+    /* first run or corrupt file → defaults */
+  }
+  return null;
+}
+
+let saveTimer = null;
+function saveState() {
+  if (!win) return;
+  // Debounce: move/resize fire rapidly; only the last state matters.
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try {
+      if (!win) return;
+      const [x, y] = win.getPosition();
+      const [width, height] = win.getSize();
+      fs.writeFileSync(
+        STATE_FILE(),
+        JSON.stringify({ x, y, width, height, opacity })
+      );
+    } catch {
+      /* best-effort; never crash on a failed save */
+    }
+  }, 400);
+}
+
+// A saved rectangle is only usable if it still overlaps a CONNECTED display —
+// otherwise a monitor that was unplugged since last run would place the window
+// in dead space. Returns true when at least part of the rect is on some screen.
+function isOnSomeDisplay(x, y, width, height) {
+  return screen.getAllDisplays().some((d) => {
+    const a = d.workArea;
+    return (
+      x < a.x + a.width &&
+      x + width > a.x &&
+      y < a.y + a.height &&
+      y + height > a.y
+    );
+  });
+}
 
 // ── Single-instance lock ────────────────────────────────────────────────────
 // Without this, launching the app again opens a SECOND overlay (the stack of
@@ -59,21 +112,35 @@ ipcMain.on("as:minimize", () => win && win.minimize());
 
 function createWindow() {
   const { workArea } = screen.getPrimaryDisplay();
-  const width = 460;
-  const height = 760;
+  const saved = loadState();
+  const width = saved?.width ?? 460;
+  const height = saved?.height ?? 760;
+  // Restore the saved position only if it still lands on a connected display;
+  // otherwise fall back to the default top-right corner.
+  const useSaved =
+    saved &&
+    Number.isFinite(saved.x) &&
+    Number.isFinite(saved.y) &&
+    isOnSomeDisplay(saved.x, saved.y, width, height);
+  const x = useSaved ? saved.x : workArea.x + workArea.width - width - 24;
+  const y = useSaved ? saved.y : workArea.y + 24;
+  opacity = saved && Number.isFinite(saved.opacity) ? saved.opacity : 1;
 
   win = new BrowserWindow({
     width,
     height,
-    x: workArea.x + workArea.width - width - 24,
-    y: workArea.y + 24,
+    x,
+    y,
     // A REAL native title bar → a guaranteed, always-visible minimize/close.
     // (Frameless + injected controls was unreliable.)
     frame: true,
     title: "AgentScribe",
     backgroundColor: "#f8fafc",
     alwaysOnTop: true,
-    skipTaskbar: false, // show in the taskbar so it's findable
+    // Hidden from the taskbar/dock for a private, no-footprint overlay
+    // (HuddleMate-style). The tray icon + the Ctrl/Cmd+Shift+\ panic hotkey
+    // are the guaranteed ways to find and toggle it, so nothing is lost.
+    skipTaskbar: true,
     resizable: true,
     fullscreenable: false,
     minWidth: 360,
@@ -91,6 +158,11 @@ function createWindow() {
   win.setContentProtection(true);
   win.setAlwaysOnTop(true, "screen-saver");
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  if (opacity !== 1) win.setOpacity(opacity);
+
+  // Persist placement whenever the user moves or resizes the window.
+  win.on("move", saveState);
+  win.on("resize", saveState);
 
   win.once("ready-to-show", () => win.show());
 
@@ -175,12 +247,14 @@ function move(dx, dy) {
   if (!win) return;
   const [x, y] = win.getPosition();
   win.setPosition(x + dx, y + dy);
+  saveState(); // hotkey moves fire "move" too, but persist explicitly to be safe
 }
 
 function adjustOpacity(delta) {
   if (!win) return;
   opacity = Math.min(1, Math.max(0.2, Math.round((opacity + delta) * 10) / 10));
   win.setOpacity(opacity);
+  saveState();
 }
 
 function toggleVisibility() {

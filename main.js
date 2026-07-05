@@ -40,6 +40,13 @@ const APP_ORIGIN = (() => {
     return "https://agentcoresystem.com";
   }
 })();
+const APP_HOST = (() => {
+  try {
+    return new URL(APP_ORIGIN).hostname.toLowerCase();
+  } catch {
+    return "agentcoresystem.com";
+  }
+})();
 
 const NUDGE = 40; // px the window moves per arrow-hotkey press
 
@@ -272,11 +279,26 @@ function createWindow() {
   // the real browser instead of loading inside the private window. The splash
   // data: URL and OAuth/payment providers we rely on are allowed through.
   win.webContents.on("will-navigate", (e, url) => {
-    if (url.startsWith(APP_ORIGIN) || url.startsWith("data:")) return;
-    // Sign-in / payment providers legitimately navigate the window.
-    if (/(^https:\/\/[^/]*\.)?(supabase\.co|google\.com|accounts\.google\.com|razorpay\.com)/.test(url)) return;
+    if (url.startsWith("data:")) return;
+    // Match on the parsed HOSTNAME (not a substring), so a hostile URL that
+    // merely CONTAINS "razorpay.com" as a path/query can't slip through.
+    let host = "";
+    try {
+      host = new URL(url).hostname.toLowerCase();
+    } catch {
+      /* unparseable → treat as external */
+    }
+    const isAllowedHost = (h) =>
+      h === APP_HOST ||
+      h === "www." + APP_HOST ||
+      h.endsWith(".supabase.co") ||
+      h === "google.com" ||
+      h.endsWith(".google.com") ||
+      h === "razorpay.com" ||
+      h.endsWith(".razorpay.com");
+    if (host && isAllowedHost(host)) return;
     e.preventDefault();
-    shell.openExternal(url);
+    if (/^https?:/.test(url)) shell.openExternal(url);
   });
 
   win.on("closed", () => {

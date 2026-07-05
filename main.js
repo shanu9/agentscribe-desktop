@@ -21,6 +21,7 @@ const {
   Tray,
   nativeImage,
   ipcMain,
+  Notification,
 } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const path = require("path");
@@ -167,6 +168,19 @@ function createWindow() {
   win.on("move", saveState);
   win.on("resize", saveState);
 
+  // The X button HIDES to the tray instead of quitting — this is a background
+  // overlay that should stay running between meetings, and a real tray app
+  // never dies on close. A one-time notification tells the user where it went;
+  // real quits (tray Quit / Ctrl+Shift+Q / before-quit) set app.isQuitting and
+  // pass through.
+  win.on("close", (e) => {
+    if (!app.isQuitting) {
+      e.preventDefault();
+      win.hide();
+      notifyHiddenOnce();
+    }
+  });
+
   win.once("ready-to-show", () => win.show());
 
   win.loadURL(APP_URL).catch(() => showError());
@@ -198,6 +212,8 @@ function createWindow() {
 function buildTrayMenu() {
   const items = [
     { label: "Show / Hide AgentScribe", click: () => toggleVisibility() },
+    { label: "Home (Live)", click: () => goHome() },
+    { label: "Back", click: () => goBack() },
     { label: "Reload", click: () => win && win.reload() },
     { type: "separator" },
   ];
@@ -353,6 +369,38 @@ function toggleVisibility() {
   else win.show();
 }
 
+// ── In-app navigation (the app loads a web app that navigates: Live → History
+// → a recording → sign-in). Give it browser-style Back / Forward / Home so a
+// user is never stranded on a sub-page.
+function goBack() {
+  if (win && win.webContents.canGoBack()) win.webContents.goBack();
+}
+function goForward() {
+  if (win && win.webContents.canGoForward()) win.webContents.goForward();
+}
+function goHome() {
+  if (win) win.loadURL(APP_URL).catch(() => showError());
+}
+
+// One-time hint (per app run) the first time the X hides to the tray, so a
+// user never thinks they quit and lost their session.
+let hiddenNotified = false;
+function notifyHiddenOnce() {
+  if (hiddenNotified) return;
+  hiddenNotified = true;
+  try {
+    if (Notification.isSupported()) {
+      new Notification({
+        title: "AgentScribe is still running",
+        body: "It's in your system tray. Click the tray icon to bring it back, or use the tray menu to quit.",
+        silent: true,
+      }).show();
+    }
+  } catch {
+    /* notifications are a nicety; never block on them */
+  }
+}
+
 function registerShortcuts() {
   globalShortcut.register("CommandOrControl+Shift+\\", toggleVisibility);
   globalShortcut.register("CommandOrControl+Shift+Up", () => move(0, -NUDGE));
@@ -361,7 +409,11 @@ function registerShortcuts() {
   globalShortcut.register("CommandOrControl+Shift+Right", () => move(NUDGE, 0));
   globalShortcut.register("CommandOrControl+Shift+[", () => adjustOpacity(-0.1));
   globalShortcut.register("CommandOrControl+Shift+]", () => adjustOpacity(0.1));
-  globalShortcut.register("CommandOrControl+Shift+Q", () => app.quit());
+  globalShortcut.register("CommandOrControl+Shift+H", goHome);
+  globalShortcut.register("CommandOrControl+Shift+Q", () => {
+    app.isQuitting = true;
+    app.quit();
+  });
 }
 
 // A minimal app menu so standard Copy/Paste/Select-All shortcuts work in the
@@ -383,12 +435,21 @@ function buildMenu() {
       ],
     },
     {
+      label: "Navigate",
+      submenu: [
+        { label: "Back", accelerator: "CommandOrControl+[", click: goBack },
+        { label: "Forward", accelerator: "CommandOrControl+]", click: goForward },
+        { label: "Home (Live)", accelerator: "CommandOrControl+Shift+H", click: goHome },
+        { type: "separator" },
+        { label: "Reload", accelerator: "CommandOrControl+R", click: () => win && win.reload() },
+      ],
+    },
+    {
       label: "View",
       submenu: [
         { label: "Show / Hide overlay", accelerator: "CommandOrControl+Shift+\\", click: toggleVisibility },
-        { label: "Reload", accelerator: "CommandOrControl+R", click: () => win && win.reload() },
         { type: "separator" },
-        { label: "Quit AgentScribe", accelerator: "CommandOrControl+Shift+Q", click: () => app.quit() },
+        { label: "Quit AgentScribe", accelerator: "CommandOrControl+Shift+Q", click: () => { app.isQuitting = true; app.quit(); } },
       ],
     },
   ];
@@ -441,6 +502,13 @@ function main() {
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
+  });
+
+  // Any genuine quit (Cmd/Ctrl+Q, OS shutdown, updater relaunch) sets the flag
+  // BEFORE the window 'close' fires, so the close handler lets it through
+  // instead of hiding to tray.
+  app.on("before-quit", () => {
+    app.isQuitting = true;
   });
 
   app.on("window-all-closed", () => {

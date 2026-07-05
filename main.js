@@ -32,8 +32,32 @@ const fs = require("fs");
 //   AGENTSCRIBE_URL=http://localhost:3000/scribe/live npm start
 const APP_URL =
   process.env.AGENTSCRIBE_URL || "https://agentcoresystem.com/scribe/live";
+// Origin the overlay is allowed to stay on (navigation guard).
+const APP_ORIGIN = (() => {
+  try {
+    return new URL(APP_URL).origin;
+  } catch {
+    return "https://agentcoresystem.com";
+  }
+})();
 
 const NUDGE = 40; // px the window moves per arrow-hotkey press
+
+// ── Minimal file logging ─────────────────────────────────────────────────────
+// A rolling log in userData so a user's "it broke" can actually be diagnosed
+// (crashes, load failures, update errors). Best-effort — logging must never
+// throw or block. Path is printed once so support can ask the user for it.
+function logFile() {
+  return path.join(app.getPath("userData"), "agentscribe.log");
+}
+function log(...parts) {
+  const line = `[${new Date().toISOString()}] ${parts.join(" ")}\n`;
+  try {
+    fs.appendFileSync(logFile(), line);
+  } catch {
+    /* never block on logging */
+  }
+}
 
 let win = null;
 let tray = null;
@@ -149,12 +173,15 @@ function createWindow() {
     fullscreenable: false,
     minWidth: 360,
     minHeight: 420,
-    show: false, // show once ready → no white/black flash
+    show: false, // shown immediately below with the loading splash
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Don't throttle the renderer when the overlay is hidden — it may be
+      // recording in the background, and a throttled renderer can stall audio.
+      backgroundThrottling: false,
     },
   });
 
@@ -181,14 +208,55 @@ function createWindow() {
     }
   });
 
+  // Show INSTANTLY with a branded loading splash so launch never looks like
+  // "nothing happened" on a cold/slow network. Swap to the web app when it has
+  // painted (did-finish-load), or fall back to the error screen.
+  win.loadURL(
+    "data:text/html;charset=utf-8," +
+      encodeURIComponent(
+        `<!doctype html><meta charset="utf-8"/>` +
+          `<body style="margin:0;height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;` +
+          `font-family:-apple-system,system-ui,sans-serif;background:#f8fafc;color:#0f172a">` +
+          `<div style="font-size:18px;font-weight:700;letter-spacing:-0.01em">AgentScribe</div>` +
+          `<div style="margin-top:14px;width:22px;height:22px;border:3px solid #10b98133;border-top-color:#10b981;` +
+          `border-radius:50%;animation:s .8s linear infinite"></div>` +
+          `<div style="margin-top:14px;font-size:12px;color:#64748b">Loading…</div>` +
+          `<style>@keyframes s{to{transform:rotate(360deg)}}</style></body>`
+      )
+  );
   win.once("ready-to-show", () => win.show());
 
-  win.loadURL(APP_URL).catch(() => showError());
+  // Once the real app has loaded, replace the splash with it.
+  win.webContents.once("did-finish-load", () => {
+    win.loadURL(APP_URL).catch(() => showError());
+  });
 
   // If the page can't load (offline, server down), show a friendly retry
   // screen instead of a blank window.
   win.webContents.on("did-fail-load", (_e, code, desc, url, isMainFrame) => {
-    if (isMainFrame && code !== -3 /* not a user-abort */) showError(desc);
+    if (isMainFrame && code !== -3 /* not a user-abort */) {
+      log("did-fail-load", code, desc, url);
+      showError(desc);
+    }
+  });
+
+  // CRASH RECOVERY. A renderer crash otherwise leaves a frozen white window
+  // with no way out. Recover: for a clean exit do nothing; for a real crash,
+  // reload once (kills the frozen state) so the user isn't stuck.
+  win.webContents.on("render-process-gone", (_e, details) => {
+    log("render-process-gone", details && details.reason);
+    if (details && (details.reason === "clean-exit" || details.reason === "killed")) return;
+    try {
+      win.webContents.reloadIgnoringCache();
+    } catch {
+      showError("The app hit a snag and is reloading.");
+    }
+  });
+
+  // If the renderer hangs (rare), offer the retry screen rather than a beachball.
+  win.webContents.on("unresponsive", () => {
+    log("renderer unresponsive");
+    showError("The app stopped responding.");
   });
 
   // New windows / target=_blank links (WhatsApp, guide, etc.) open in the real
@@ -197,6 +265,18 @@ function createWindow() {
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: "deny" };
+  });
+
+  // NAVIGATION GUARD: keep the always-on-top, capture-protected overlay pinned
+  // to our own origin. A redirect or stray link to a third-party site opens in
+  // the real browser instead of loading inside the private window. The splash
+  // data: URL and OAuth/payment providers we rely on are allowed through.
+  win.webContents.on("will-navigate", (e, url) => {
+    if (url.startsWith(APP_ORIGIN) || url.startsWith("data:")) return;
+    // Sign-in / payment providers legitimately navigate the window.
+    if (/(^https:\/\/[^/]*\.)?(supabase\.co|google\.com|accounts\.google\.com|razorpay\.com)/.test(url)) return;
+    e.preventDefault();
+    shell.openExternal(url);
   });
 
   win.on("closed", () => {
@@ -320,6 +400,24 @@ function setupAutoUpdater() {
   autoUpdater.on("update-downloaded", () => {
     updateState = "downloaded";
     refreshTray();
+    // Passive tray state alone is missed by most users → they never restart,
+    // never update. A notification actively surfaces it; clicking restarts.
+    try {
+      if (Notification.isSupported()) {
+        const n = new Notification({
+          title: "AgentScribe update ready",
+          body: "A new version is downloaded. Restart to update.",
+          silent: true,
+        });
+        n.on("click", () => {
+          app.isQuitting = true;
+          autoUpdater.quitAndInstall();
+        });
+        n.show();
+      }
+    } catch {
+      /* the tray 'Restart to update' remains as the fallback */
+    }
   });
   autoUpdater.on("error", () => {
     // Offline, no release yet, or (unsigned build) a verification hiccup —
@@ -457,7 +555,13 @@ function buildMenu() {
 }
 
 function main() {
+  // Last-resort main-process guards so an unexpected error is logged, not
+  // silently swallowed (or crashing the whole app).
+  process.on("uncaughtException", (err) => log("uncaughtException", err && err.stack ? err.stack : String(err)));
+  process.on("unhandledRejection", (reason) => log("unhandledRejection", String(reason)));
+
   app.whenReady().then(() => {
+    log("app ready — logs at", logFile());
     const ses = session.defaultSession;
 
     // Allow the web app's mic / media requests (needed for "Start mic").

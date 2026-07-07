@@ -194,6 +194,15 @@ function createWindow() {
 
   // ── THE privacy guarantee ───────────────────────────────────────────────
   win.setContentProtection(true);
+  // Electron drops the WDA_EXCLUDEFROMCAPTURE affinity across a hide→show cycle,
+  // after which the window is captured as an opaque BLACK rectangle (WDA_MONITOR)
+  // instead of being absent — the exact "black box on screen-share" failure. Our
+  // overlay hides to tray on close and toggles via the panic hotkey, so it WILL
+  // be reshown. Re-assert protection on every show so it is re-excluded each time.
+  // Ref: electron/electron#29085, #45990, PRs #45868/#47020.
+  win.on("show", () => {
+    if (win && !win.isDestroyed()) win.setContentProtection(true);
+  });
   win.setAlwaysOnTop(true, "screen-saver");
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   if (opacity !== 1) win.setOpacity(opacity);

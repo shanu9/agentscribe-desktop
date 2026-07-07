@@ -1,6 +1,6 @@
 {
   "name": "agentscribe-desktop",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Invisible desktop overlay for AgentScribe — excluded from screen capture via OS-level content protection.",
   "author": "Agent Core Systems <agentcoresystem@gmail.com>",
   "homepage": "https://agentcoresystem.com",

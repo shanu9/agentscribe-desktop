@@ -1,6 +1,6 @@
 {
   "name": "agentscribe-desktop",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Invisible desktop overlay for AgentScribe — excluded from screen capture via OS-level content protection.",
   "author": "Agent Core Systems <agentcoresystem@gmail.com>",
   "homepage": "https://agentcoresystem.com",
@@ -16,8 +16,8 @@
     "electron-updater": "^6.3.9"
   },
   "devDependencies": {
-    "electron": "^34.0.0",
-    "electron-builder": "^25.1.8"
+    "electron": "35.7.5",
+    "electron-builder": "^26.0.12"
   },
   "build": {
     "appId": "com.agentscribe.desktop",

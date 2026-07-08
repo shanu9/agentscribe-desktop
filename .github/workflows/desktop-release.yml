@@ -48,22 +48,35 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build and publish installer
-        run: npx electron-builder ${{ matrix.args }} --publish always
+      # Build only — do NOT let electron-builder publish. Its GitHub uploader
+      # is flaky for the large .exe (it reported "overwrite … already exists"
+      # yet dropped the installer, leaving only the blockmap). We upload with a
+      # dedicated action below instead — the same reliable pattern the mobile
+      # APK workflow uses.
+      - name: Build installer
+        run: npx electron-builder ${{ matrix.args }} --publish never
         env:
-          # Lets electron-builder upload assets to the GitHub Release.
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
           # ── Optional code-signing / notarization ────────────────────────
           # Leave these secrets unset for unsigned builds. When present,
           # electron-builder signs (and on macOS, notarizes) automatically.
-          # macOS — Developer ID cert + notarization:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Windows — code-signing cert (these reuse the same CSC_* vars on the
-          # Windows runner; set them as separate secrets if your certs differ):
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+
+      # Reliable upload: installer + blockmap + latest.yml (electron-updater
+      # reads latest.yml to offer in-app updates). Published straight to the
+      # tag's release so /releases/latest/download/... resolves immediately.
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            dist/AgentScribe-Setup.exe
+            dist/AgentScribe-Setup.exe.blockmap
+            dist/latest.yml
+          draft: false
+          make_latest: true

@@ -69,6 +69,13 @@ function log(...parts) {
 let win = null;
 let tray = null;
 let opacity = 1;
+// Overlay transparency. This only changes what YOU see locally — the window is
+// excluded from screen capture regardless of opacity, so lowering it never makes
+// the overlay any more visible to a screen-share. Floor keeps it findable.
+const OPACITY_MIN = 0.3;
+const OPACITY_STEP = 0.1;
+const OPACITY_PRESETS = [1, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4];
+let titleRevertTimer = null;
 // "idle" | "checking" | "downloading" | "downloaded" | "error"
 let updateState = "idle";
 
@@ -326,6 +333,7 @@ function buildTrayMenu() {
     { label: "Home (Live)", click: () => goHome() },
     { label: "Back", click: () => goBack() },
     { label: "Reload", click: () => win && win.reload() },
+    { label: "Transparency", submenu: transparencySubmenu() },
     { type: "separator" },
   ];
   if (updateState === "downloaded") {
@@ -485,11 +493,54 @@ function move(dx, dy) {
   saveState(); // hotkey moves fire "move" too, but persist explicitly to be safe
 }
 
-function adjustOpacity(delta) {
+// Single entry point for every opacity change (presets, hotkeys, restore).
+// Clamps to [OPACITY_MIN, 1], persists, and gives visible feedback: a brief
+// title flash + tray tooltip, and refreshes the menus so the radio ticks match.
+function applyOpacity(value, { flash = true } = {}) {
   if (!win) return;
-  opacity = Math.min(1, Math.max(0.2, Math.round((opacity + delta) * 10) / 10));
+  opacity = Math.min(1, Math.max(OPACITY_MIN, Math.round(value * 100) / 100));
   win.setOpacity(opacity);
   saveState();
+  const pct = Math.round(opacity * 100);
+  if (tray) tray.setToolTip(`AgentScribe — ${pct}% opacity`);
+  refreshTray();
+  buildMenu();
+  if (flash) {
+    try {
+      win.setTitle(`AgentScribe — ${pct}%`);
+      if (titleRevertTimer) clearTimeout(titleRevertTimer);
+      titleRevertTimer = setTimeout(() => {
+        if (win && !win.isDestroyed()) win.setTitle("AgentScribe");
+      }, 1500);
+    } catch {
+      /* title feedback is a nicety; never block on it */
+    }
+  }
+}
+
+function adjustOpacity(delta) {
+  applyOpacity(opacity + delta);
+}
+
+// Shared "Transparency" submenu for both the tray menu and the app menu. Radio
+// presets show the current level at a glance; the steppers mirror the global
+// hotkeys (shown as label hints — the real binding is the global shortcut, so we
+// don't add an accelerator here and double-fire).
+function transparencySubmenu() {
+  const cur = Math.round(opacity * 10) / 10;
+  const presets = OPACITY_PRESETS.map((v) => ({
+    label: v === 1 ? "Solid (100%)" : `${Math.round(v * 100)}%`,
+    type: "radio",
+    checked: Math.abs(cur - v) < 0.001,
+    click: () => applyOpacity(v),
+  }));
+  return [
+    ...presets,
+    { type: "separator" },
+    { label: "More transparent  (Ctrl/⌘+Shift+[)", click: () => adjustOpacity(-OPACITY_STEP) },
+    { label: "Less transparent  (Ctrl/⌘+Shift+])", click: () => adjustOpacity(OPACITY_STEP) },
+    { label: "Reset to solid", click: () => applyOpacity(1) },
+  ];
 }
 
 function toggleVisibility() {
@@ -577,6 +628,7 @@ function buildMenu() {
       label: "View",
       submenu: [
         { label: "Show / Hide overlay", accelerator: "CommandOrControl+Shift+\\", click: toggleVisibility },
+        { label: "Transparency", submenu: transparencySubmenu() },
         { type: "separator" },
         { label: "Quit AgentScribe", accelerator: "CommandOrControl+Shift+Q", click: () => { app.isQuitting = true; app.quit(); } },
       ],

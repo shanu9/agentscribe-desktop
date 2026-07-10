@@ -166,7 +166,13 @@ function createWindow() {
     isOnSomeDisplay(saved.x, saved.y, width, height);
   const x = useSaved ? saved.x : workArea.x + workArea.width - width - 24;
   const y = useSaved ? saved.y : workArea.y + 24;
-  opacity = saved && Number.isFinite(saved.opacity) ? saved.opacity : 1;
+  // Restore saved opacity, but NEVER below the visible floor — a stale ultra-low
+  // value (e.g. from the old 0.2 hotkey floor) must not reopen the window
+  // invisible and look like "the app won't open".
+  opacity =
+    saved && Number.isFinite(saved.opacity)
+      ? Math.min(1, Math.max(OPACITY_MIN, saved.opacity))
+      : 1;
 
   win = new BrowserWindow({
     width,
